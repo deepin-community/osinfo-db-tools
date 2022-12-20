@@ -1,0 +1,19 @@
+osinfo-db-tools (1.1.0-1-deepin1) unstable; urgency=medium
+
+  * Rebuild
+
+ -- Deepin Packages Builder <packages@deepin.org>  Thu, 24 Nov 2022 07:21:36 +0800
+
+osinfo-db-tools (1.1.0-1) unstable; urgency=medium
+
+  * Upload to unstable
+  * [760ca9e] New upstream version 1.1.
+  * [225d013] Fix watch expression
+
+ -- Guido Günther <agx@sigxcpu.org>  Fri, 04 Nov 2016 13:06:12 +0100
+
+osinfo-db-tools (1.0.0-1) experimental; urgency=medium
+
+  * Initial release (Closes: #840387)
+
+ -- Guido Günther <agx@sigxcpu.org>  Tue, 18 Oct 2016 11:43:23 +0200
