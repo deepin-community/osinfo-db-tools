@@ -14,32 +14,40 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ * with this program. If not, see <http://www.gnu.org/licenses/>
  *
  * Authors:
  *   Daniel P. Berrange <berrange@redhat.com>
  */
 
-#include <config.h>
-
 #include <locale.h>
 #include <glib/gi18n.h>
+#include <glib-object.h>
+#include <json-glib/json-glib.h>
 #include <stdlib.h>
 #include <archive.h>
 #include <archive_entry.h>
+#include <libsoup/soup.h>
 
 #include "osinfo-db-util.h"
 
+#define LATEST_URI "https://db.libosinfo.org/latest.json"
+#define VERSION_FILE "VERSION"
+
+#if SOUP_MAJOR_VERSION < 3
+#define soup_message_get_status(message) message->status_code
+#define soup_message_get_response_headers(message) message->response_headers
+#endif
+
 const char *argv0;
+static SoupSession *session = NULL;
 
 static int osinfo_db_import_create_reg(GFile *file,
                                        struct archive *arc,
                                        struct archive_entry *entry)
 {
-    GFileOutputStream *os = NULL;
-    GError *err = NULL;
-    int ret;
+    g_autoptr(GFileOutputStream) os = NULL;
+    g_autoptr(GError) err = NULL;
     int r;
     const void *buf;
     size_t size;
@@ -60,37 +68,32 @@ static int osinfo_db_import_create_reg(GFile *file,
         if (r != ARCHIVE_OK) {
             g_printerr("%s: cannot write to %s\n",
                        argv0, g_file_get_path(file));
-            goto cleanup;
+            return -1;
         }
 
         if (!g_seekable_seek(G_SEEKABLE(os), offset, G_SEEK_SET, NULL, NULL)) {
-            g_printerr("%s: cannot seek to %" PRId64 " in %s\n",
+            g_printerr("%s: cannot seek to %" G_GUINT64_FORMAT " in %s\n",
                        argv0, (uint64_t)offset, g_file_get_path(file));
-            goto cleanup;
+            return -1;
         }
         if (!g_output_stream_write_all(G_OUTPUT_STREAM(os), buf, size, NULL, NULL, NULL)) {
             g_printerr("%s: cannot write to %s\n",
                        argv0, g_file_get_path(file));
-            goto cleanup;
+            return -1;
         }
     }
-    ret = 0;
- cleanup:
-    g_object_unref(os);
-    return ret;
+    return 0;
 }
 
 static int osinfo_db_import_create_dir(GFile *file,
                                        struct archive_entry *entry)
 {
-    GError *err = NULL;
+    g_autoptr(GError) err = NULL;
     if (!g_file_make_directory_with_parents(file, NULL, &err) &&
         err->code != G_IO_ERROR_EXISTS) {
         g_printerr("%s: %s\n", argv0, err->message);
         return -1;
     }
-    if (err)
-        g_error_free(err);
     return 0;
 }
 
@@ -135,6 +138,208 @@ static GFile *osinfo_db_import_get_file(GFile *target,
     return g_file_resolve_relative_path(target, tmp);
 }
 
+static gchar *
+osinfo_db_import_download_file(const gchar *source)
+{
+    g_autoptr(GInputStream) stream = NULL;
+    g_autoptr(GFile) out = NULL;
+    g_autoptr(GError) err = NULL;
+    g_autoptr(SoupMessage) message = NULL;
+    g_autofree gchar *filename = NULL;
+    g_autofree gchar *content = NULL;
+    gchar *source_file = NULL;
+    goffset content_size = 0;
+    GFileCreateFlags flags = G_FILE_CREATE_REPLACE_DESTINATION;
+    int ret = -1;
+
+    filename = g_path_get_basename(source);
+    if (filename == NULL)
+        goto cleanup;
+
+    source_file = g_build_filename(g_get_user_cache_dir(), filename, NULL);
+    if (source_file == NULL)
+        goto cleanup;
+
+    out = g_file_new_for_path(source_file);
+    if (out == NULL)
+        goto cleanup;
+
+    if (session == NULL)
+        session = soup_session_new();
+
+    if (session == NULL)
+        goto cleanup;
+
+    message = soup_message_new("GET", source);
+    if (message == NULL)
+        goto cleanup;
+
+    stream = soup_session_send(session, message, NULL, &err);
+    if (stream == NULL ||
+        !SOUP_STATUS_IS_SUCCESSFUL(soup_message_get_status(message))) {
+        g_printerr("Could not access %s: %s\n",
+                   source,
+                   err != NULL ? err->message :
+                                 soup_status_get_phrase(soup_message_get_status(message)));
+        goto cleanup;
+    }
+
+    content_size = soup_message_headers_get_content_length(soup_message_get_response_headers(message));
+    content = g_malloc0(content_size);
+
+    if (!g_input_stream_read_all(stream, content, content_size, NULL, NULL, &err)) {
+        g_printerr("Could not load the content of %s: %s\n",
+                   source, err->message);
+        goto cleanup;
+    }
+
+    if (!g_file_replace_contents(out, content, content_size, NULL, TRUE, flags, NULL, NULL, &err)) {
+        g_printerr("Could not download file \"%s\": %s\n",
+                   source, err->message);
+        goto cleanup;
+    }
+
+    ret = 0;
+
+ cleanup:
+    if (ret != 0 && source_file != NULL) {
+        unlink(source_file);
+        g_free(source_file);
+        source_file = NULL;
+    }
+
+    return source_file;
+}
+
+static gboolean osinfo_db_get_installed_version(GFile *dir,
+                                                gchar **version)
+{
+    g_autoptr(GFile) file = NULL;
+    g_autoptr(GError) err = NULL;
+
+    file = g_file_get_child(dir, VERSION_FILE);
+    if (file == NULL)
+        return FALSE;
+
+    if (!g_file_load_contents(file, NULL, version, NULL, NULL, &err)) {
+        if (!g_error_matches(err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)) {
+            g_printerr("Failed get the content of file %s: %s\n",
+                       VERSION_FILE, err->message);
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+static gboolean osinfo_db_get_latest_info(gchar **version,
+                                          gchar **url)
+{
+    g_autoptr(SoupMessage) message = NULL;
+    g_autoptr(GInputStream) stream = NULL;
+    g_autoptr(JsonParser) parser = NULL;
+    g_autoptr(JsonReader) reader = NULL;
+    g_autoptr(GError) err = NULL;
+    g_autofree gchar *content = NULL;
+    goffset content_size = 0;
+
+    if (session == NULL)
+        session = soup_session_new();
+
+    if (session == NULL)
+        return FALSE;
+
+    message = soup_message_new("GET", LATEST_URI);
+    if (message == NULL)
+        return FALSE;
+
+    stream = soup_session_send(session, message, NULL, &err);
+    if (stream == NULL ||
+        !SOUP_STATUS_IS_SUCCESSFUL(soup_message_get_status(message))) {
+        g_printerr("Could not access %s: %s\n",
+                   LATEST_URI,
+                   err != NULL ? err->message :
+                                 soup_status_get_phrase(soup_message_get_status(message)));
+        return FALSE;
+    }
+
+    content_size = soup_message_headers_get_content_length(soup_message_get_response_headers(message));
+    content = g_malloc0(content_size);
+
+    if (!g_input_stream_read_all(stream, content, content_size, NULL, NULL, &err)) {
+        g_printerr("Could not load the content of %s: %s\n",
+                   LATEST_URI, err->message);
+        return FALSE;
+    }
+
+    parser = json_parser_new();
+    if (parser == NULL) {
+        g_printerr("Failed to create the json parser\n");
+        return FALSE;
+    }
+
+    if (!json_parser_load_from_data(parser, content, -1, &err)) {
+        g_printerr("Failed to parse the content of %s: %s\n",
+                   LATEST_URI, err->message);
+        return FALSE;
+    }
+
+    reader = json_reader_new(json_parser_get_root(parser));
+    if (reader == NULL) {
+        g_printerr("Failed to create the reader for the json parser\n");
+        return FALSE;
+    }
+
+    if (!json_reader_read_member(reader, "release")) {
+        const GError *error = json_reader_get_error(reader);
+        g_printerr("Failed to read the \"release\" member of the %s file: %s\n",
+                   LATEST_URI, error->message);
+        return FALSE;
+    }
+
+    if (!json_reader_read_member(reader, "version")) {
+        const GError *error = json_reader_get_error(reader);
+        g_printerr("Failed to read the \"version\" member of the %s file: %s\n",
+                   LATEST_URI, error->message);
+        return FALSE;
+    }
+
+    *version = g_strdup(json_reader_get_string_value(reader));
+    if (*version == NULL)
+        return FALSE;
+
+    json_reader_end_member(reader); /* "version" */
+
+    if (!json_reader_read_member(reader, "archive")) {
+        const GError *error = json_reader_get_error(reader);
+        g_printerr("Failed to read the \"archive\" member of the %s file: %s\n",
+                   LATEST_URI, error->message);
+        return FALSE;
+    }
+
+    *url = g_strdup(json_reader_get_string_value(reader));
+    if (*url == NULL)
+        return FALSE;
+
+    json_reader_end_member(reader); /* "archive" */
+    json_reader_end_member(reader); /* "release" */
+
+    return TRUE;
+}
+
+static gboolean requires_soup(const gchar *source)
+{
+    const gchar *prefixes[] = { "http://", "https://", NULL };
+    gsize i;
+
+    for (i = 0; prefixes[i] != NULL; i++) {
+        if (g_str_has_prefix(source, prefixes[i]))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 static int osinfo_db_import_extract(GFile *target,
                                     const char *source,
                                     gboolean verbose)
@@ -143,8 +348,9 @@ static int osinfo_db_import_extract(GFile *target,
     struct archive_entry *entry;
     int ret = -1;
     int r;
-    GFile *file = NULL;
-    GError *err = NULL;
+    g_autoptr(GFile) file = NULL;
+    g_autofree gchar *source_file = NULL;
+    gboolean file_is_native = TRUE;
 
     arc = archive_read_new();
 
@@ -154,9 +360,27 @@ static int osinfo_db_import_extract(GFile *target,
     if (source != NULL && g_str_equal(source, "-"))
         source = NULL;
 
-    if ((r = archive_read_open_filename(arc, source, 10240)) != ARCHIVE_OK) {
+    if (source != NULL) {
+        file_is_native = !requires_soup(source);
+
+        if (file_is_native) {
+            file = g_file_new_for_commandline_arg(source);
+            if (file == NULL)
+                goto cleanup;
+
+            source_file = g_file_get_path(file);
+            g_clear_object(&file);
+        } else {
+            source_file = osinfo_db_import_download_file(source);
+        }
+
+        if (source_file == NULL)
+            goto cleanup;
+    }
+
+    if ((r = archive_read_open_filename(arc, source_file, 10240)) != ARCHIVE_OK) {
         g_printerr("%s: cannot open archive %s: %s\n",
-                   argv0, source, archive_error_string(arc));
+                   argv0, source_file, archive_error_string(arc));
         goto cleanup;
     }
 
@@ -166,7 +390,7 @@ static int osinfo_db_import_extract(GFile *target,
             break;
         if (r != ARCHIVE_OK) {
             g_printerr("%s: cannot read next archive entry in %s: %s\n",
-                       argv0, source, archive_error_string(arc));
+                       argv0, source_file, archive_error_string(arc));
             goto cleanup;
         }
 
@@ -174,40 +398,40 @@ static int osinfo_db_import_extract(GFile *target,
         if (osinfo_db_import_create(file, arc, entry, verbose) < 0) {
             goto cleanup;
         }
-        g_object_unref(file);
-        file = NULL;
+        g_clear_object(&file);
     }
 
     if (archive_read_close(arc) != ARCHIVE_OK) {
         g_printerr("%s: cannot finish reading archive %s: %s\n",
-                   argv0, source, archive_error_string(arc));
+                   argv0, source_file, archive_error_string(arc));
         goto cleanup;
     }
 
     ret = 0;
  cleanup:
     archive_read_free(arc);
-    if (err)
-        g_error_free(err);
-    if (file)
-        g_object_unref(file);
+    if (!file_is_native && source_file != NULL)
+        unlink(source_file);
     return ret;
 }
 
 gint main(gint argc, gchar **argv)
 {
-    GOptionContext *context;
-    GError *error = NULL;
-    gint ret = EXIT_FAILURE;
+    g_autoptr(GOptionContext) context = NULL;
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GFile) dir = NULL;
     gboolean verbose = FALSE;
     gboolean user = FALSE;
     gboolean local = FALSE;
     gboolean system = FALSE;
+    gboolean latest = FALSE;
+    g_autofree gchar *installed_version = NULL;
+    g_autofree gchar *latest_version = NULL;
+    g_autofree gchar *latest_url = NULL;
     const gchar *root = "";
     const gchar *archive = NULL;
     const gchar *custom = NULL;
     int locs = 0;
-    GFile *dir = NULL;
     const GOptionEntry entries[] = {
       { "verbose", 'v', 0, G_OPTION_ARG_NONE, (void*)&verbose,
         N_("Verbose progress information"), NULL, },
@@ -221,6 +445,8 @@ gint main(gint argc, gchar **argv)
         N_("Import into custom directory"), NULL, },
       { "root", 0, 0, G_OPTION_ARG_STRING, &root,
         N_("Installation root directory"), NULL, },
+      { "latest", 0, 0, G_OPTION_ARG_NONE, (void *)&latest,
+        N_("Import the latest osinfo-db from osinfo-db's website"), NULL, },
       { NULL, 0, 0, 0, NULL, NULL, NULL },
     };
     argv0 = argv[0];
@@ -238,13 +464,13 @@ gint main(gint argc, gchar **argv)
         g_printerr(_("%s: error while parsing commandline options: %s\n\n"),
                    argv0, error->message);
         g_printerr("%s\n", g_option_context_get_help(context, FALSE, NULL));
-        goto error;
+        return EXIT_FAILURE;
     }
 
     if (argc > 2) {
         g_printerr(_("%s: expected path to one archive file to import\n"),
                    argv0);
-        goto error;
+        return EXIT_FAILURE;
     }
 
     if (local)
@@ -256,25 +482,31 @@ gint main(gint argc, gchar **argv)
     if (custom)
         locs++;
     if (locs > 1) {
-        g_printerr(_("Only one of --user, --local, --system & --dir can be used"));
-        goto error;
+        g_printerr(_("Only one of --user, --local, --system & --dir can be used\n"));
+        return EXIT_FAILURE;
     }
 
     archive = argc == 2 ? argv[1] : NULL;
     dir = osinfo_db_get_path(root, user, local, system, custom);
-    if (osinfo_db_import_extract(dir, archive, verbose) < 0)
-        goto error;
 
-    ret = EXIT_SUCCESS;
+    if (latest) {
+        if (!osinfo_db_get_installed_version(dir, &installed_version))
+            return EXIT_FAILURE;
 
- error:
-    if (dir) {
-        g_object_unref(dir);
+        if (!osinfo_db_get_latest_info(&latest_version, &latest_url))
+            return EXIT_FAILURE;
+
+        if (g_strcmp0(latest_version, installed_version) <= 0) {
+            return EXIT_SUCCESS;
+        }
+
+        archive = latest_url;
     }
-    g_clear_error(&error);
-    g_option_context_free(context);
 
-    return ret;
+    if (osinfo_db_import_extract(dir, archive, verbose) < 0)
+        return EXIT_FAILURE;
+
+    return EXIT_SUCCESS;
 }
 
 
@@ -287,7 +519,7 @@ osinfo-db-import - Import an osinfo database archive
 
 =head1 SYNOPSIS
 
-osinfo-db-import [OPTIONS...] ARCHIVE-FILE
+osinfo-db-import [OPTIONS...] [ARCHIVE-FILE]
 
 =head1 DESCRIPTION
 
@@ -321,6 +553,12 @@ If run by a privileged account (ie root), the B<local> database
 location will be used by default, otherwise the B<user> location
 will be used.
 
+When passing a non local ARCHIVE-FILE, only http:// and https://
+protocols are supported.
+
+With no ARCHIVE-FILE, or when ARCHIVE-FILE is -, read standard
+input.
+
 =head1 OPTIONS
 
 =over 8
@@ -350,6 +588,13 @@ custom directory B<PATH>.
 Prefix the installation location with the root directory
 given by C<PATH>. This is useful when wishing to install
 into a chroot environment or equivalent.
+
+=item B<--latest>
+
+Downloads the latest osinfo-db release from libosinfo's official
+releases website and installs it in the desired location.
+The latest osinfo-db release is only downloaded and installed
+when it's newer than the one installed in the desired location.
 
 =item B<-v>, B<--verbose>
 
