@@ -1,38 +1,58 @@
 # -*- rpm-spec -*-
 
+%if 0%{?fedora} || (0%{?rhel} && 0%{?rhel} >= 8)
+    %define supports_python3 1
+%else
+    %define supports_python3 0
+%endif
+
 Summary: Tools for managing the osinfo database
 Name: osinfo-db-tools
-Version: 1.1.0
+Version: 1.10.0
 Release: 1%{?dist}%{?extra_release}
 License: GPLv2+
-Group: Development/Libraries
-Source: https://fedorahosted.org/releases/l/i/libosinfo/%{name}-%{version}.tar.gz
-URL: http://libosinfo.org/
-BuildRequires: intltool
+Source: https://releases.pagure.org/libosinfo/%{name}-%{version}.tar.xz
+URL: https://libosinfo.org
+BuildRequires: meson
+BuildRequires: gcc
+BuildRequires: gettext-devel
+BuildRequires: git
 BuildRequires: glib2-devel
 BuildRequires: libxml2-devel >= 2.6.0
 BuildRequires: libxslt-devel >= 1.0.0
+BuildRequires: libsoup-devel
 BuildRequires: libarchive-devel
+BuildRequires: json-glib-devel
 BuildRequires: /usr/bin/pod2man
+
+%if %{supports_python3}
+#Required for testing purposes
+BuildRequires: python3
+BuildRequires: python3-pytest
+BuildRequires: python3-requests
+%endif
 
 %description
 This package provides tools for managing the osinfo database of
 information about operating systems for use with virtualization
 
 %prep
-%setup -q
+%autosetup -S git
 
 %build
-%configure
-%__make %{?_smp_mflags} V=1
+%meson
+%meson_build
+
+%check
+%meson_test
 
 %install
-%__make install DESTDIR=%{buildroot}
+%meson_install
 
 %find_lang %{name}
 
 %files -f %{name}.lang
-%doc AUTHORS ChangeLog NEWS README
+%doc NEWS README
 %license COPYING
 %{_bindir}/osinfo-db-export
 %{_bindir}/osinfo-db-import
