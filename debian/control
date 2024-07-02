@@ -1,24 +1,28 @@
 Source: osinfo-db-tools
 Section: devel
 Priority: optional
-Maintainer: Guido Günther <agx@sigxcpu.org>
+Maintainer: Debian Libvirt Maintainers <pkg-libvirt-maintainers@lists.alioth.debian.org>
+Uploaders: Guido Günther <agx@sigxcpu.org>,
+ Pino Toscano <pino@debian.org>,
 Build-Depends:
- autotools-dev,
- debhelper (>= 10),
- intltool,
+ debhelper-compat (= 13),
+ gettext,
  libarchive-dev,
  libglib2.0-dev,
+ libjson-glib-dev,
+ libsoup-3.0-dev,
  libxml2-dev,
- libxslt1-dev,
-Standards-Version: 3.9.8
+ meson (>= 0.49.0),
+ python3-pytest <!nocheck>,
+ python3-requests <!nocheck>
+Standards-Version: 4.6.2
 Homepage: https://libosinfo.org/
-Vcs-Git: https://anonscm.debian.org/pkg-libvirt/osinfo-db-tools.git
-Vcs-Browser: https://anonscm.debian.org/cgit/pkg-libvirt/osinfo-db-tools.git
+Vcs-Git: https://salsa.debian.org/libvirt-team/osinfo-db-tools.git
+Vcs-Browser: https://salsa.debian.org/libvirt-team/osinfo-db-tools
+Rules-Requires-Root: no
 
 Package: osinfo-db-tools
 Architecture: any
-Replaces: libosinfo-bin (<< 1.0.0~)
-Breaks: libosinfo-bin (<< 1.0.0~)
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: libosinfo database tools
  libosinfo is a GObject based library API for managing information about
