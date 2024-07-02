@@ -1,8 +1,35 @@
-osinfo-db-tools (1.1.0-1-deepin1) unstable; urgency=medium
+osinfo-db-tools (1.11.0-1) unstable; urgency=medium
 
-  * Rebuild
+  * New upstream version 1.11.0
+  * Re-export upstream signing key without extra signatures.
+  * Update standards version to 4.6.2, no changes needed.
+  * Add the configuration for the CI on salsa
+  * d/osinfo-db-tools-docs.docs: drop, unused for a long time
+  * Add Rules-Requires-Root: no
+  * Add myself to Uploaders
+  * Drop the libxslt1-dev build dependency, no more used
+  * d/upstream/metadata: new file with basic upstream information
+  * d/rules: drop custom build flags, rely on the default (which work fine)
+  * Explicitly add the gettext build dependency
 
- -- Deepin Packages Builder <packages@deepin.org>  Thu, 24 Nov 2022 07:21:36 +0800
+ -- Pino Toscano <pino@debian.org>  Sat, 28 Oct 2023 22:23:43 +0200
+
+osinfo-db-tools (1.10.0-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+  * Update debian/upstream/signing-key.asc
+  * Build with meson
+  * Build-Depend on debhelper-compat 13
+  * Build-Depend on libjson-glib-dev & libsoup-3.0-dev
+  * Build-Depend on python3-pytest & python3-requests for build tests
+  * Set some standard build flags
+  * Drop obsolete Breaks/Replaces
+  * Update Vcs fields for migration to Salsa
+  * Bump Standards-Version to 4.6.0
+  * Set Maintainer to libvirt team
+
+ -- Jeremy Bicha <jbicha@ubuntu.com>  Fri, 15 Apr 2022 13:37:10 -0400
 
 osinfo-db-tools (1.1.0-1) unstable; urgency=medium
 

@@ -14,14 +14,11 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ * with this program. If not, see <http://www.gnu.org/licenses/>
  *
  * Authors:
  *   Daniel P. Berrange <berrange@redhat.com>
  */
-
-#include <config.h>
 
 #include <glib/gi18n.h>
 
@@ -35,14 +32,13 @@ GQuark osinfo_db_error_quark(void)
 GFile *osinfo_db_get_system_path(const gchar *root)
 {
     GFile *file;
-    gchar *dbdir;
+    g_autofree gchar *dbdir = NULL;
     const gchar *path = g_getenv("OSINFO_SYSTEM_DIR");
     if (!path)
         path = DATA_DIR "/osinfo";
 
-    dbdir = g_strdup_printf("%s%s", root, path);
+    dbdir = g_build_filename(root, path, NULL);
     file = g_file_new_for_path(dbdir);
-    g_free(dbdir);
     return file;
 }
 
@@ -50,14 +46,13 @@ GFile *osinfo_db_get_system_path(const gchar *root)
 GFile *osinfo_db_get_local_path(const gchar *root)
 {
     GFile *file;
-    gchar *dbdir;
+    g_autofree gchar *dbdir = NULL;
     const gchar *path = g_getenv("OSINFO_LOCAL_DIR");
     if (!path)
         path = SYSCONFDIR "/osinfo";
 
-    dbdir = g_strdup_printf("%s%s", root, path);
+    dbdir = g_build_filename(root, path, NULL);
     file = g_file_new_for_path(dbdir);
-    g_free(dbdir);
     return file;
 }
 
@@ -65,17 +60,16 @@ GFile *osinfo_db_get_local_path(const gchar *root)
 GFile *osinfo_db_get_user_path(const gchar *root)
 {
     GFile *file;
-    gchar *dbdir;
+    g_autofree gchar *dbdir = NULL;
     const gchar *path = g_getenv("OSINFO_USER_DIR");
     const gchar *configdir = g_get_user_config_dir();
 
     if (path) {
-        dbdir = g_strdup_printf("%s%s", root, path);
+        dbdir = g_build_filename(root, path, NULL);
     } else {
-        dbdir = g_strdup_printf("%s%s/osinfo", root, configdir);
+        dbdir = g_build_filename(root, configdir, "osinfo", NULL);
     }
     file = g_file_new_for_path(dbdir);
-    g_free(dbdir);
     return file;
 }
 
@@ -84,11 +78,10 @@ GFile *osinfo_db_get_custom_path(const gchar *dir,
                                  const gchar *root)
 {
     GFile *file;
-    gchar *dbdir;
+    g_autofree gchar *dbdir = NULL;
 
-    dbdir = g_strdup_printf("%s%s", root, dir);
+    dbdir = g_build_filename(root, dir, NULL);
     file = g_file_new_for_path(dbdir);
-    g_free(dbdir);
     return file;
 }
 
@@ -149,8 +142,7 @@ GFile *osinfo_db_get_file(const char *root,
         ret = g_file_resolve_relative_path(paths[i], file);
         if (g_file_query_exists(ret, NULL))
             break;
-        g_object_unref(ret);
-        ret = NULL;
+        g_clear_object(&ret);
     }
 
     if (!ret) {
